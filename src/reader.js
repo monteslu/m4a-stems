@@ -92,16 +92,16 @@ class M4AStemsReader {
       // Parse metadata using music-metadata
       const mmData = await parseFile(m4aPath);
 
-      // Extract kaid atom (karaoke data)
-      let kaidData = null;
+      // Extract kara atom (karaoke data)
+      let karaData = null;
       if (mmData.native?.iTunes) {
-        const kaidAtom = mmData.native.iTunes.find((tag) => tag.id === '----:com.stems:kaid');
+        const karaAtom = mmData.native.iTunes.find((tag) => tag.id === '----:com.stems:kara');
 
-        if (kaidAtom?.value) {
+        if (karaAtom?.value) {
           try {
-            kaidData = JSON.parse(kaidAtom.value);
+            karaData = JSON.parse(karaAtom.value);
           } catch (parseErr) {
-            console.warn('❌ Could not parse kaid atom:', parseErr.message);
+            console.warn('❌ Could not parse kara atom:', parseErr.message);
           }
         }
       }
@@ -124,9 +124,9 @@ class M4AStemsReader {
         }
       }
 
-      // If no kaid atom found, create default structure
-      if (!kaidData) {
-        console.warn('⚠️  M4A file does not contain kaid atom - creating default structure');
+      // If no kara atom found, create default structure
+      if (!karaData) {
+        console.warn('⚠️  M4A file does not contain kara atom - creating default structure');
 
         // Get track count from format (fallback to stereo)
         const trackCount = mmData.format?.numberOfChannels || 2;
@@ -141,8 +141,8 @@ class M4AStemsReader {
           });
         }
 
-        // Create minimal kaid structure
-        kaidData = {
+        // Create minimal kara structure
+        karaData = {
           audio: {
             sources: defaultSources,
             profile: 'STEMS-2',
@@ -178,15 +178,15 @@ class M4AStemsReader {
         album: mmData.common?.album || '',
         duration: mmData.format?.duration || 0,
         key: musicalKey,
-        tempo: kaidData.meter?.bpm || mmData.common?.bpm || null,
+        tempo: karaData.meter?.bpm || mmData.common?.bpm || null,
         genre: mmData.common?.genre?.[0] || '',
         year: mmData.common?.year || null,
       };
 
-      // Build audio sources from kaid data (without extracting audio yet)
+      // Build audio sources from kara data (without extracting audio yet)
       const sources = [];
-      if (kaidData.audio?.sources) {
-        for (const source of kaidData.audio.sources) {
+      if (karaData.audio?.sources) {
+        for (const source of karaData.audio.sources) {
           sources.push({
             name: source.role || source.id,
             filename: `track_${source.track}.m4a`,
@@ -200,10 +200,10 @@ class M4AStemsReader {
         }
       }
 
-      // Extract lyrics from kaid data
+      // Extract lyrics from kara data
       let lyrics = null;
-      if (kaidData.lines?.length > 0) {
-        lyrics = [...kaidData.lines].sort((a, b) => (a.start || 0) - (b.start || 0));
+      if (karaData.lines?.length > 0) {
+        lyrics = [...karaData.lines].sort((a, b) => (a.start || 0) - (b.start || 0));
       }
 
       // Build return structure
@@ -212,12 +212,12 @@ class M4AStemsReader {
 
         audio: {
           sources,
-          presets: kaidData.audio?.presets || [],
+          presets: karaData.audio?.presets || [],
           timing: {
-            offsetSec: kaidData.timing?.offset_sec || 0,
-            encoderDelaySamples: kaidData.audio?.encoder_delay_samples || 0,
+            offsetSec: karaData.timing?.offset_sec || 0,
+            encoderDelaySamples: karaData.audio?.encoder_delay_samples || 0,
           },
-          profile: kaidData.audio?.profile || 'STEMS-4',
+          profile: karaData.audio?.profile || 'STEMS-4',
         },
 
         lyrics,

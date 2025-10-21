@@ -14,27 +14,27 @@ const execAsync = promisify(exec);
 
 // Custom atom names
 export const ATOM_NAMES = {
-  KAID: '----:com.stems:kaid',  // Karaoke Data (JSON)
+  KARA: '----:com.stems:kara',  // Karaoke Data (JSON)
   VPCH: '----:com.stems:vpch',  // Vocal Pitch (binary)
   KONS: '----:com.stems:kons',  // Karaoke Onsets (binary)
   NI_STEMS: '----:com.native-instruments:stems',  // NI Stems metadata
 };
 
 /**
- * Write kaid (Karaoke Data) atom to MP4 file
+ * Write kara (Karaoke Data) atom to MP4 file
  * Uses ffmpeg to write custom freeform metadata
  * @param {string} filePath - Path to MP4 file
- * @param {Object} kaidData - Karaoke data to write
+ * @param {Object} karaData - Karaoke data to write
  */
-export async function writeKaidAtom(filePath, kaidData) {
+export async function writeKaidAtom(filePath, karaData) {
   try {
     // Convert data to JSON string
-    const jsonData = JSON.stringify(kaidData, null, 0);
+    const jsonData = JSON.stringify(karaData, null, 0);
 
     // Use ffmpeg to write custom metadata
     // Note: This writes to iTunes-style freeform atoms
     const tempFile = `${filePath}.tmp.m4a`;
-    const cmd = `ffmpeg -i "${filePath}" -movflags use_metadata_tags -metadata "com.stems:kaid=${jsonData}" -c copy "${tempFile}" -y`;
+    const cmd = `ffmpeg -i "${filePath}" -movflags use_metadata_tags -metadata "com.stems:kara=${jsonData}" -c copy "${tempFile}" -y`;
 
     await execAsync(cmd);
 
@@ -42,9 +42,9 @@ export async function writeKaidAtom(filePath, kaidData) {
     await fs.promises.unlink(filePath);
     await fs.promises.rename(tempFile, filePath);
 
-    console.log(`✓ kaid atom written (${jsonData.length} bytes)`);
+    console.log(`✓ kara atom written (${jsonData.length} bytes)`);
   } catch (error) {
-    throw new Error(`Failed to write kaid atom: ${error.message}`);
+    throw new Error(`Failed to write kara atom: ${error.message}`);
   }
 }
 
@@ -236,26 +236,26 @@ export async function getKaraokeFeatures(filePath) {
       has_advanced: false,
     };
 
-    // Check for kaid atom (lyrics)
+    // Check for kara atom (lyrics)
     if (metadata.native?.iTunes) {
-      const kaidAtom = metadata.native.iTunes.find((tag) => tag.id === ATOM_NAMES.KAID);
+      const karaAtom = metadata.native.iTunes.find((tag) => tag.id === ATOM_NAMES.KARA);
 
-      if (kaidAtom) {
+      if (karaAtom) {
         features.has_lyrics = true;
 
         // Parse to check for word timing
         try {
-          const kaidData = JSON.parse(kaidAtom.value);
-          const lines = kaidData.lines || [];
+          const karaData = JSON.parse(karaAtom.value);
+          const lines = karaData.lines || [];
           features.has_word_timing = lines.some((line) => 'word_timing' in line);
 
           // Check for multiple singers
-          const singers = kaidData.singers || [];
+          const singers = karaData.singers || [];
           if (singers.length > 1) {
             features.has_advanced = true;
           }
         } catch (err) {
-          console.warn('Could not parse kaid data:', err.message);
+          console.warn('Could not parse kara data:', err.message);
         }
       }
 

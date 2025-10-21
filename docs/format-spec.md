@@ -30,9 +30,9 @@ This document specifies the M4A Stems + Karaoke format, which extends the NI Ste
 
 ## Custom Atoms
 
-### `kaid` - Karaoke Data Atom
+### `kara` - Karaoke Data Atom
 
-Location: `moov.udta.meta.ilst.----:com.stems:kaid`
+Location: `moov.udta.meta.ilst.----:com.stems:kara`
 
 Contains JSON with:
 ```json
@@ -128,7 +128,7 @@ Format: WebVTT cues converted to mov_text
 ## Encoder Delay
 
 AAC encoder introduces ~1105 samples of delay (25ms at 44.1kHz).
-All timing values in kaid atom and WebVTT are pre-compensated.
+All timing values in kara atom and WebVTT are pre-compensated.
 
 ## Track Flags
 
