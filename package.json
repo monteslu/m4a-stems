@@ -1,0 +1,45 @@
+{
+  "name": "m4a-stems",
+  "version": "0.1.0",
+  "description": "Read and write multi-track M4A Stems files with karaoke extensions",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "lint": "eslint src test",
+    "lint:fix": "eslint src test --fix"
+  },
+  "keywords": [
+    "m4a",
+    "stems",
+    "karaoke",
+    "audio",
+    "multitrack",
+    "traktor",
+    "ni-stems",
+    "mp4",
+    "ffmpeg"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/monteslu/m4a-stems.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "music-metadata": "^11.9.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  },
+  "peerDependencies": {},
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ]
+}
