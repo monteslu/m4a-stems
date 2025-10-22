@@ -4,9 +4,13 @@
   "description": "Read and write multi-track M4A Stems files with karaoke extensions",
   "main": "src/index.js",
   "type": "module",
+  "bin": {
+    "m4a-stems": "./bin/cli.js"
+  },
   "scripts": {
     "test": "node --test",
     "test:watch": "node --test --watch",
+    "test:coverage": "c8 --reporter=text --reporter=lcov --reporter=html node --test",
     "lint": "eslint src test",
     "lint:fix": "eslint src test --fix"
   },
@@ -34,11 +38,12 @@
     "music-metadata": "^11.9.0"
   },
   "devDependencies": {
+    "c8": "^10.1.3",
     "eslint": "^9.0.0"
   },
-  "peerDependencies": {},
   "files": [
     "src/",
+    "bin/",
     "README.md",
     "LICENSE"
   ]

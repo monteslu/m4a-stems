@@ -125,7 +125,7 @@ Create an M4A Stems file.
 
 ## Atoms
 
-### `writeKaidAtom(filePath, karaData)`
+### `writeKaraAtom(filePath, karaData)`
 
 Write karaoke data atom.
 

@@ -4,7 +4,6 @@
  */
 
 import { parseFile } from 'music-metadata';
-import { readFile } from 'fs/promises';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -124,33 +123,33 @@ class M4AStemsReader {
         }
       }
 
-      // If no kara atom found, create default structure
-      if (!karaData) {
-        console.warn('⚠️  M4A file does not contain kara atom - creating default structure');
+      // Preserve ALL unknown atoms for future compatibility
+      // This includes:
+      // - Unknown com.stems atoms (kf0_, ktmp, kcrd, kkey, kvac, kmfc)
+      // - Unknown com.apple.iTunes atoms
+      // - Any other freeform atoms
+      const preservedAtoms = {};
+      if (mmData.native?.iTunes) {
+        const knownAtoms = [
+          '----:com.stems:kara',
+          '----:com.stems:vpch',
+          '----:com.stems:kons',
+          '----:com.apple.iTunes:initialkey',
+        ];
 
-        // Get track count from format (fallback to stereo)
-        const trackCount = mmData.format?.numberOfChannels || 2;
+        const unknownAtoms = mmData.native.iTunes.filter(
+          (tag) => tag.id.startsWith('----:') && !knownAtoms.includes(tag.id)
+        );
 
-        // Create default audio sources
-        const defaultSources = [];
-        for (let i = 0; i < trackCount; i++) {
-          defaultSources.push({
-            id: `track${i}`,
-            role: `track${i}`,
-            track: i,
-          });
+        for (const atom of unknownAtoms) {
+          preservedAtoms[atom.id] = atom.value;
+          console.log(`📦 Preserving unknown atom: ${atom.id}`);
         }
+      }
 
-        // Create minimal kara structure
-        karaData = {
-          audio: {
-            sources: defaultSources,
-            profile: 'STEMS-2',
-            encoder_delay_samples: 0,
-          },
-          lines: [],
-          singers: [],
-        };
+      // If no kara atom found, this is not a karaoke file
+      if (!karaData) {
+        console.log('ℹ️  No kara atom found - this is a regular M4A/Stems file, not a karaoke file');
       }
 
       // Extract musical key from iTunes metadata
@@ -178,14 +177,14 @@ class M4AStemsReader {
         album: mmData.common?.album || '',
         duration: mmData.format?.duration || 0,
         key: musicalKey,
-        tempo: karaData.meter?.bpm || mmData.common?.bpm || null,
+        tempo: karaData?.meter?.bpm || mmData.common?.bpm || null,
         genre: mmData.common?.genre?.[0] || '',
         year: mmData.common?.year || null,
       };
 
       // Build audio sources from kara data (without extracting audio yet)
       const sources = [];
-      if (karaData.audio?.sources) {
+      if (karaData?.audio?.sources) {
         for (const source of karaData.audio.sources) {
           sources.push({
             name: source.role || source.id,
@@ -202,23 +201,13 @@ class M4AStemsReader {
 
       // Extract lyrics from kara data
       let lyrics = null;
-      if (karaData.lines?.length > 0) {
+      if (karaData?.lines?.length > 0) {
         lyrics = [...karaData.lines].sort((a, b) => (a.start || 0) - (b.start || 0));
       }
 
       // Build return structure
-      return {
+      const result = {
         metadata,
-
-        audio: {
-          sources,
-          presets: karaData.audio?.presets || [],
-          timing: {
-            offsetSec: karaData.timing?.offset_sec || 0,
-            encoderDelaySamples: karaData.audio?.encoder_delay_samples || 0,
-          },
-          profile: karaData.audio?.profile || 'STEMS-4',
-        },
 
         lyrics,
 
@@ -226,7 +215,27 @@ class M4AStemsReader {
           vocalPitch,
           onsets,
         },
+
+        // Preserve ALL unknown atoms for future compatibility
+        _preservedAtoms: preservedAtoms,
       };
+
+      // Only include audio/karaoke fields if kara atom exists
+      if (karaData) {
+        result.audio = {
+          sources,
+          presets: karaData.audio?.presets || [],
+          timing: {
+            offsetSec: karaData.timing?.offset_sec || 0,
+            encoderDelaySamples: karaData.audio?.encoder_delay_samples || 0,
+          },
+          profile: karaData.audio?.profile || 'STEMS-4',
+        };
+        result.singers = karaData.singers || [];
+        result.meta = karaData.meta;
+      }
+
+      return result;
     } catch (error) {
       throw new Error(`Failed to load M4A file: ${error.message}`);
     }

@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+.nyc_output/
+*.lcov
 *.log
 .DS_Store
 .env
