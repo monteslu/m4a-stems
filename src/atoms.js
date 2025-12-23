@@ -105,6 +105,51 @@ export async function writeKonsAtom(filePath, onsetsData) {
 }
 
 /**
+ * Read NI Stems metadata from MP4 file
+ * @param {string} filePath - Path to MP4 file
+ * @returns {Promise<Object|null>} Stems metadata object or null if not found
+ */
+export async function readNiStemsMetadata(filePath) {
+  const data = await fs.readFile(filePath);
+  const fileBuffer = Buffer.from(data);
+
+  // Find moov atom
+  const atoms = parseMP4Atoms(fileBuffer, 0);
+  const moovAtom = atoms.find((a) => a.type === 'moov');
+
+  if (!moovAtom) {
+    return null;
+  }
+
+  // Find udta atom within moov
+  const moovChildren = parseMP4Atoms(fileBuffer, moovAtom.dataOffset, moovAtom.size - 8);
+  const udtaAtom = moovChildren.find((a) => a.type === 'udta');
+
+  if (!udtaAtom) {
+    return null;
+  }
+
+  // Find stem atom within udta
+  const udtaChildren = parseMP4Atoms(fileBuffer, udtaAtom.dataOffset, udtaAtom.size - 8);
+  const stemAtom = udtaChildren.find((a) => a.type === 'stem');
+
+  if (!stemAtom) {
+    return null;
+  }
+
+  // Extract JSON data from stem atom (after 8-byte header)
+  const stemData = fileBuffer.slice(stemAtom.dataOffset, stemAtom.offset + stemAtom.size);
+
+  try {
+    const jsonString = stemData.toString('utf-8');
+    return JSON.parse(jsonString);
+  } catch (e) {
+    console.error('Failed to parse stem metadata JSON:', e.message);
+    return null;
+  }
+}
+
+/**
  * Add NI Stems metadata to MP4 file
  * @param {string} filePath - Path to MP4 file
  * @param {Array<string>} stemNames - Array of stem names (default: Drums, Bass, Other, Vocals)

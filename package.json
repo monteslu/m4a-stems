@@ -1,6 +1,6 @@
 {
   "name": "m4a-stems",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Read and write multi-track M4A Stems files with karaoke extensions",
   "main": "src/index.js",
   "type": "module",
