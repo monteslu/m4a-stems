@@ -8,9 +8,9 @@
     "m4a-stems": "./bin/cli.js"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/integrity.test.js && node test/extractor.test.js",
     "test:watch": "node --test --watch",
-    "test:coverage": "c8 --reporter=text --reporter=lcov --reporter=html node --test",
+    "test:coverage": "c8 --reporter=text --reporter=lcov --reporter=html sh -c 'node --test test/integrity.test.js && node test/extractor.test.js'",
     "lint": "eslint src test",
     "lint:fix": "eslint src test --fix"
   },
