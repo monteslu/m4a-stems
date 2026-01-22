@@ -1,9 +1,13 @@
 {
   "name": "m4a-stems",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Read and write multi-track M4A Stems files with karaoke extensions",
   "main": "src/index.js",
   "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./extractor": "./src/extractor.js"
+  },
   "bin": {
     "m4a-stems": "./bin/cli.js"
   },
@@ -23,7 +27,10 @@
     "traktor",
     "ni-stems",
     "mp4",
-    "ffmpeg"
+    "ffmpeg",
+    "browser",
+    "isomorphic",
+    "web-audio"
   ],
   "author": "",
   "license": "MIT",

@@ -10,12 +10,14 @@ Read and write multi-track M4A Stems files with karaoke extensions.
 
 ## Features
 
-- 🎵 **Multi-track Audio** - Read/write M4A files with 5 tracks (master + 4 stems)
+- 🎵 **Multi-track Audio** - Read/write M4A files with 5 AAC tracks (master + 4 stems)
 - 🎤 **Karaoke Lyrics** - Synchronized lyrics with word-level timing
 - 🎹 **Musical Metadata** - Key detection, BPM, vocal pitch tracking
 - 🎛️ **NI Stems Compatible** - Works with Traktor, Mixxx, and other DJ software
-- 🔧 **FFmpeg-free Extraction** - Extract tracks without external dependencies
+- 🔧 **FFmpeg-free Extraction** - Extract tracks in pure JS (no external dependencies)
+- 🏭 **FFmpeg-based Writing** - Create stem files from WAV sources
 - 📝 **iTunes Compatible** - Standard metadata atoms (title, artist, album)
+- 🌐 **Isomorphic Extractor** - Works in both Node.js and browsers
 
 ## Installation
 
@@ -55,19 +57,62 @@ This dual approach means files work in both DJ software and karaoke applications
 
 ### Extract Audio Tracks (No FFmpeg Required)
 
+The Extractor works with binary data - you handle the I/O, the library handles the extraction.
+
+**Accepted input types:**
+- `Uint8Array` - works everywhere
+- `ArrayBuffer` - works everywhere (e.g., from `fetch`)
+- Node.js `Buffer` - works in Node.js only
+
+#### Node.js Usage
+
 ```javascript
-import { Extractor } from 'm4a-stems';
+import * as Extractor from 'm4a-stems/extractor';
+import fs from 'fs/promises';
 
-// Extract a single track as playable M4A
-const trackBuffer = await Extractor.extractTrack('song.stem.m4a', 0);  // Master
-const vocalsBuffer = await Extractor.extractTrack('song.stem.m4a', 4); // Vocals
+// Read the file yourself
+const fileData = await fs.readFile('song.stem.m4a');
 
-// Extract all tracks
-const allTracks = await Extractor.extractAllTracks('song.stem.m4a');
+// Extract tracks (synchronous, returns Uint8Array)
+const trackBuffer = Extractor.extractTrack(fileData, 0);
+const allTracks = Extractor.extractAllTracks(fileData);
+const info = Extractor.getTrackInfo(fileData);
+const count = Extractor.getTrackCount(fileData);
+```
 
-// Get track info
-const info = await Extractor.getTrackInfo('song.stem.m4a');
-// [{ index: 0, sampleCount: 6789, duration: 157.62, timescale: 44100 }, ...]
+#### Browser Usage
+
+```javascript
+import * as Extractor from 'm4a-stems/extractor';
+
+// Fetch the file yourself
+const response = await fetch('song.stem.m4a');
+const arrayBuffer = await response.arrayBuffer();
+
+// Extract tracks (synchronous, returns Uint8Array)
+const trackBuffer = Extractor.extractTrack(arrayBuffer, 0);
+const allTracks = Extractor.extractAllTracks(arrayBuffer);
+```
+
+#### Browser with Web Audio API
+
+```javascript
+import * as Extractor from 'm4a-stems/extractor';
+
+// Fetch stems file
+const response = await fetch('song.stem.m4a');
+const arrayBuffer = await response.arrayBuffer();
+
+// Extract all tracks as separate M4A buffers
+const tracks = Extractor.extractAllTracks(arrayBuffer);
+
+// Decode each track with Web Audio API
+const audioContext = new AudioContext();
+const audioBuffers = await Promise.all(
+  tracks.map(track => audioContext.decodeAudioData(track.buffer))
+);
+
+// Now you have 5 AudioBuffers: master, drums, bass, other, vocals
 ```
 
 ### Read Metadata and Lyrics
@@ -133,7 +178,9 @@ await Atoms.addStandardMetadata('song.stem.m4a', {
 await Atoms.addMusicalKey('song.stem.m4a', 'Am');
 ```
 
-### Create New Stem Files
+### Create New Stem Files (Requires FFmpeg)
+
+The Writer requires FFmpeg to encode WAV files to AAC and mux the multi-track container.
 
 ```javascript
 import { M4AStemsWriter } from 'm4a-stems';
@@ -141,7 +188,7 @@ import { M4AStemsWriter } from 'm4a-stems';
 await M4AStemsWriter.write({
   outputPath: 'output.stem.m4a',
 
-  // Audio stems (separate WAV files)
+  // Audio stems (WAV files to be encoded to AAC)
   stemsWavFiles: {
     vocals: 'tracks/vocals.wav',
     drums: 'tracks/drums.wav',
@@ -168,6 +215,7 @@ await M4AStemsWriter.write({
     ],
   },
 
+  // AAC is the NI Stems standard (default if omitted)
   codec: 'aac',
 });
 ```
@@ -193,19 +241,16 @@ npx m4a-stems song.stem.m4a --atoms
 ### Extractor (FFmpeg-free)
 
 ```javascript
-import { Extractor } from 'm4a-stems';
+import * as Extractor from 'm4a-stems/extractor';
+```
 
-// Extract single track as playable M4A buffer
-await Extractor.extractTrack(filePath, trackIndex) → Buffer
+All functions are synchronous. Input accepts `Uint8Array`, `ArrayBuffer`, or Node.js `Buffer`:
 
-// Extract all audio tracks
-await Extractor.extractAllTracks(filePath) → Buffer[]
-
-// Get track count
-await Extractor.getTrackCount(filePath) → number
-
-// Get info about all tracks
-await Extractor.getTrackInfo(filePath) → TrackInfo[]
+```javascript
+Extractor.extractTrack(data, trackIndex) → Uint8Array
+Extractor.extractAllTracks(data) → Uint8Array[]
+Extractor.getTrackCount(data) → number
+Extractor.getTrackInfo(data) → TrackInfo[]
 ```
 
 ### Atoms
@@ -245,18 +290,18 @@ const data = await M4AStemsReader.load(filePath);
 // }
 ```
 
-### Writer
+### Writer (Requires FFmpeg)
 
 ```javascript
 import { M4AStemsWriter } from 'm4a-stems';
 
 await M4AStemsWriter.write({
   outputPath,
-  stemsWavFiles: { vocals, drums, bass, other },
+  stemsWavFiles: { vocals, drums, bass, other },  // WAV files to encode
   mixdownWav,
   metadata: { title, artist, album, key, tempo, genre, year },
   lyricsData: { lines },
-  codec: 'aac' | 'alac',
+  codec: 'aac',  // 'aac' (default, NI Stems standard) or 'alac' (lossless)
 });
 ```
 

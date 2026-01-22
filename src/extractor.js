@@ -1,17 +1,125 @@
 /**
  * M4A Track Extractor
+ *
  * Extract individual audio tracks from multi-track M4A/MP4 files
- * without requiring FFmpeg
+ * without requiring FFmpeg.
+ *
+ * Works with Uint8Array or ArrayBuffer input.
+ * Consumer is responsible for I/O (file reading, fetching, etc).
  */
 
-import fs from 'fs/promises';
+/**
+ * Helper: Read big-endian uint32 from Uint8Array
+ */
+function readUInt32BE(data, offset) {
+  return (
+    ((data[offset] << 24) >>> 0) +
+    (data[offset + 1] << 16) +
+    (data[offset + 2] << 8) +
+    data[offset + 3]
+  );
+}
 
 /**
- * Parse MP4 atoms from buffer (same as in atoms.js but exported here for self-containment)
- * @param {Buffer} buffer - File buffer
- * @param {number} offset - Start offset
- * @param {number} maxLength - Maximum length to parse
- * @returns {Array} Array of atom objects
+ * Helper: Read big-endian uint64 from Uint8Array (as Number)
+ */
+function readBigUInt64BE(data, offset) {
+  const high = readUInt32BE(data, offset);
+  const low = readUInt32BE(data, offset + 4);
+  return high * 0x100000000 + low;
+}
+
+/**
+ * Helper: Read uint8 from Uint8Array
+ */
+function readUInt8(data, offset) {
+  return data[offset];
+}
+
+/**
+ * Helper: Read latin1 string from Uint8Array
+ */
+function readString(data, offset, length) {
+  let str = '';
+  for (let i = 0; i < length; i++) {
+    str += String.fromCharCode(data[offset + i]);
+  }
+  return str;
+}
+
+/**
+ * Helper: Write big-endian uint32 to Uint8Array
+ */
+function writeUInt32BE(data, value, offset) {
+  data[offset] = (value >>> 24) & 0xff;
+  data[offset + 1] = (value >>> 16) & 0xff;
+  data[offset + 2] = (value >>> 8) & 0xff;
+  data[offset + 3] = value & 0xff;
+}
+
+/**
+ * Helper: Write big-endian uint16 to Uint8Array
+ */
+function writeUInt16BE(data, value, offset) {
+  data[offset] = (value >>> 8) & 0xff;
+  data[offset + 1] = value & 0xff;
+}
+
+/**
+ * Helper: Write latin1 string to Uint8Array
+ */
+function writeString(data, str, offset) {
+  for (let i = 0; i < str.length; i++) {
+    data[offset + i] = str.charCodeAt(i);
+  }
+}
+
+/**
+ * Helper: Concatenate multiple Uint8Arrays
+ */
+function concatArrays(...arrays) {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}
+
+/**
+ * Helper: Create a slice of Uint8Array
+ */
+function sliceArray(data, start, end) {
+  return data.slice(start, end);
+}
+
+/**
+ * Normalize input to Uint8Array
+ * Accepts:
+ * - Uint8Array (works everywhere)
+ * - ArrayBuffer (works everywhere, e.g., from fetch)
+ * - Node.js Buffer (Node.js only)
+ * @param {Uint8Array|ArrayBuffer|Buffer} data
+ * @returns {Uint8Array}
+ */
+function toUint8Array(data) {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  // Node.js Buffer (has .buffer property pointing to underlying ArrayBuffer)
+  if (data && data.buffer instanceof ArrayBuffer) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new Error('Expected Uint8Array, ArrayBuffer, or Node.js Buffer');
+}
+
+/**
+ * Parse MP4 atoms from buffer
  */
 function parseAtoms(buffer, offset = 0, maxLength = null) {
   const atoms = [];
@@ -19,8 +127,8 @@ function parseAtoms(buffer, offset = 0, maxLength = null) {
   let pos = offset;
 
   while (pos < endOffset - 8) {
-    const size = buffer.readUInt32BE(pos);
-    const type = buffer.toString('latin1', pos + 4, pos + 8);
+    const size = readUInt32BE(buffer, pos);
+    const type = readString(buffer, pos + 4, 4);
 
     if (size === 0 || size < 8 || size > buffer.length - pos) {
       break;
@@ -41,9 +149,6 @@ function parseAtoms(buffer, offset = 0, maxLength = null) {
 
 /**
  * Find an atom by type within a list
- * @param {Array} atoms - Array of atom objects
- * @param {string} type - Atom type to find
- * @returns {Object|null} Found atom or null
  */
 function findAtom(atoms, type) {
   return atoms.find((a) => a.type === type) || null;
@@ -51,17 +156,13 @@ function findAtom(atoms, type) {
 
 /**
  * Parse stco (32-bit chunk offset) atom
- * @param {Buffer} buffer - File buffer
- * @param {Object} atom - stco atom object
- * @returns {Array<number>} Array of chunk offsets
  */
 function parseStco(buffer, atom) {
   const offsets = [];
-  // stco: 4 bytes version/flags + 4 bytes entry count + entries
-  const entryCount = buffer.readUInt32BE(atom.dataOffset + 4);
+  const entryCount = readUInt32BE(buffer, atom.dataOffset + 4);
 
   for (let i = 0; i < entryCount; i++) {
-    const offset = buffer.readUInt32BE(atom.dataOffset + 8 + i * 4);
+    const offset = readUInt32BE(buffer, atom.dataOffset + 8 + i * 4);
     offsets.push(offset);
   }
 
@@ -70,16 +171,13 @@ function parseStco(buffer, atom) {
 
 /**
  * Parse co64 (64-bit chunk offset) atom
- * @param {Buffer} buffer - File buffer
- * @param {Object} atom - co64 atom object
- * @returns {Array<number>} Array of chunk offsets
  */
 function parseCo64(buffer, atom) {
   const offsets = [];
-  const entryCount = buffer.readUInt32BE(atom.dataOffset + 4);
+  const entryCount = readUInt32BE(buffer, atom.dataOffset + 4);
 
   for (let i = 0; i < entryCount; i++) {
-    const offset = Number(buffer.readBigUInt64BE(atom.dataOffset + 8 + i * 8));
+    const offset = readBigUInt64BE(buffer, atom.dataOffset + 8 + i * 8);
     offsets.push(offset);
   }
 
@@ -88,24 +186,18 @@ function parseCo64(buffer, atom) {
 
 /**
  * Parse stsz (sample sizes) atom
- * @param {Buffer} buffer - File buffer
- * @param {Object} atom - stsz atom object
- * @returns {Object} { defaultSize, sizes } - If defaultSize > 0, all samples are that size
  */
 function parseStsz(buffer, atom) {
-  // stsz: 4 bytes version/flags + 4 bytes sample_size + 4 bytes sample_count + entries
-  const defaultSize = buffer.readUInt32BE(atom.dataOffset + 4);
-  const sampleCount = buffer.readUInt32BE(atom.dataOffset + 8);
+  const defaultSize = readUInt32BE(buffer, atom.dataOffset + 4);
+  const sampleCount = readUInt32BE(buffer, atom.dataOffset + 8);
 
   if (defaultSize > 0) {
-    // All samples have the same size
     return { defaultSize, sampleCount, sizes: null };
   }
 
-  // Variable sample sizes
   const sizes = [];
   for (let i = 0; i < sampleCount; i++) {
-    const size = buffer.readUInt32BE(atom.dataOffset + 12 + i * 4);
+    const size = readUInt32BE(buffer, atom.dataOffset + 12 + i * 4);
     sizes.push(size);
   }
 
@@ -114,21 +206,17 @@ function parseStsz(buffer, atom) {
 
 /**
  * Parse stsc (sample-to-chunk) atom
- * @param {Buffer} buffer - File buffer
- * @param {Object} atom - stsc atom object
- * @returns {Array} Array of { firstChunk, samplesPerChunk, sampleDescriptionIndex }
  */
 function parseStsc(buffer, atom) {
-  // stsc: 4 bytes version/flags + 4 bytes entry count + entries
-  const entryCount = buffer.readUInt32BE(atom.dataOffset + 4);
+  const entryCount = readUInt32BE(buffer, atom.dataOffset + 4);
   const entries = [];
 
   for (let i = 0; i < entryCount; i++) {
     const entryOffset = atom.dataOffset + 8 + i * 12;
     entries.push({
-      firstChunk: buffer.readUInt32BE(entryOffset), // 1-based
-      samplesPerChunk: buffer.readUInt32BE(entryOffset + 4),
-      sampleDescriptionIndex: buffer.readUInt32BE(entryOffset + 8),
+      firstChunk: readUInt32BE(buffer, entryOffset),
+      samplesPerChunk: readUInt32BE(buffer, entryOffset + 4),
+      sampleDescriptionIndex: readUInt32BE(buffer, entryOffset + 8),
     });
   }
 
@@ -136,31 +224,24 @@ function parseStsc(buffer, atom) {
 }
 
 /**
- * Parse stsd (sample description) atom - returns raw bytes for codec config
- * @param {Buffer} buffer - File buffer
- * @param {Object} atom - stsd atom object
- * @returns {Buffer} Raw stsd atom data (including header)
+ * Parse stsd (sample description) atom - returns raw bytes
  */
 function parseStsd(buffer, atom) {
-  // Return the entire stsd atom as-is for inclusion in output file
-  return buffer.slice(atom.offset, atom.offset + atom.size);
+  return sliceArray(buffer, atom.offset, atom.offset + atom.size);
 }
 
 /**
  * Parse stts (time-to-sample) atom
- * @param {Buffer} buffer - File buffer
- * @param {Object} atom - stts atom object
- * @returns {Array} Array of { sampleCount, sampleDelta }
  */
 function parseStts(buffer, atom) {
-  const entryCount = buffer.readUInt32BE(atom.dataOffset + 4);
+  const entryCount = readUInt32BE(buffer, atom.dataOffset + 4);
   const entries = [];
 
   for (let i = 0; i < entryCount; i++) {
     const entryOffset = atom.dataOffset + 8 + i * 8;
     entries.push({
-      sampleCount: buffer.readUInt32BE(entryOffset),
-      sampleDelta: buffer.readUInt32BE(entryOffset + 4),
+      sampleCount: readUInt32BE(buffer, entryOffset),
+      sampleDelta: readUInt32BE(buffer, entryOffset + 4),
     });
   }
 
@@ -168,42 +249,32 @@ function parseStts(buffer, atom) {
 }
 
 /**
- * Parse mdhd (media header) atom for timescale and duration
- * @param {Buffer} buffer - File buffer
- * @param {Object} atom - mdhd atom object
- * @returns {Object} { timescale, duration }
+ * Parse mdhd (media header) atom
  */
 function parseMdhd(buffer, atom) {
-  const version = buffer.readUInt8(atom.dataOffset);
+  const version = readUInt8(buffer, atom.dataOffset);
 
   if (version === 0) {
-    // 32-bit version
     return {
-      timescale: buffer.readUInt32BE(atom.dataOffset + 12),
-      duration: buffer.readUInt32BE(atom.dataOffset + 16),
+      timescale: readUInt32BE(buffer, atom.dataOffset + 12),
+      duration: readUInt32BE(buffer, atom.dataOffset + 16),
     };
   } else {
-    // 64-bit version
     return {
-      timescale: buffer.readUInt32BE(atom.dataOffset + 20),
-      duration: Number(buffer.readBigUInt64BE(atom.dataOffset + 24)),
+      timescale: readUInt32BE(buffer, atom.dataOffset + 20),
+      duration: readBigUInt64BE(buffer, atom.dataOffset + 24),
     };
   }
 }
 
 /**
  * Build sample map from stsc entries
- * Maps each chunk to its sample range
- * @param {Array} stscEntries - Parsed stsc entries
- * @param {number} totalChunks - Total number of chunks from stco
- * @returns {Array} Array of { chunkIndex, sampleStart, sampleCount } for each chunk
  */
 function buildChunkSampleMap(stscEntries, totalChunks) {
   const chunkMap = [];
   let currentSampleIndex = 0;
 
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-    // Find which stsc entry applies to this chunk (1-based in stsc)
     const chunkNumber = chunkIndex + 1;
     let samplesPerChunk = stscEntries[0].samplesPerChunk;
 
@@ -228,15 +299,11 @@ function buildChunkSampleMap(stscEntries, totalChunks) {
 
 /**
  * Extract raw audio data for a track
- * @param {Buffer} fileBuffer - Complete file buffer
- * @param {Object} sampleTable - Parsed sample table { stco, stsz, stsc }
- * @returns {Buffer} Raw audio sample data
  */
 function extractAudioData(fileBuffer, sampleTable) {
   const { chunkOffsets, sampleSizes, stscEntries } = sampleTable;
   const chunkMap = buildChunkSampleMap(stscEntries, chunkOffsets.length);
 
-  // Calculate total size needed
   let totalSize = 0;
   if (sampleSizes.sizes) {
     totalSize = sampleSizes.sizes.reduce((sum, size) => sum + size, 0);
@@ -244,11 +311,9 @@ function extractAudioData(fileBuffer, sampleTable) {
     totalSize = sampleSizes.sampleCount * sampleSizes.defaultSize;
   }
 
-  // Allocate output buffer
-  const audioData = Buffer.alloc(totalSize);
+  const audioData = new Uint8Array(totalSize);
   let writeOffset = 0;
 
-  // Extract samples from each chunk
   for (const chunk of chunkMap) {
     let readOffset = chunkOffsets[chunk.chunkIndex];
 
@@ -258,8 +323,10 @@ function extractAudioData(fileBuffer, sampleTable) {
         ? sampleSizes.sizes[sampleIndex]
         : sampleSizes.defaultSize;
 
-      // Copy sample data
-      fileBuffer.copy(audioData, writeOffset, readOffset, readOffset + sampleSize);
+      audioData.set(
+        fileBuffer.subarray(readOffset, readOffset + sampleSize),
+        writeOffset
+      );
       writeOffset += sampleSize;
       readOffset += sampleSize;
     }
@@ -270,190 +337,168 @@ function extractAudioData(fileBuffer, sampleTable) {
 
 /**
  * Create a minimal MP4 atom
- * @param {string} type - 4-character atom type
- * @param {Buffer} data - Atom payload
- * @returns {Buffer} Complete atom with header
  */
 function createAtom(type, data) {
   const size = 8 + data.length;
-  const header = Buffer.alloc(8);
-  header.writeUInt32BE(size, 0);
-  header.write(type, 4, 4, 'latin1');
-  return Buffer.concat([header, data]);
+  const header = new Uint8Array(8);
+  writeUInt32BE(header, size, 0);
+  writeString(header, type, 4);
+  return concatArrays(header, data);
 }
 
 /**
  * Build a minimal playable M4A file from extracted track data
- * @param {Object} trackInfo - Track information
- * @param {Buffer} trackInfo.audioData - Raw audio sample data
- * @param {Buffer} trackInfo.stsd - Original stsd atom
- * @param {Object} trackInfo.sampleSizes - Parsed stsz data
- * @param {Array} trackInfo.sttsEntries - Parsed stts entries
- * @param {Object} trackInfo.mdhd - Parsed mdhd data
- * @returns {Buffer} Complete M4A file
  */
 function buildM4aFile(trackInfo) {
   const { audioData, stsd, sampleSizes, sttsEntries, mdhd } = trackInfo;
 
   // Build ftyp
-  const ftypData = Buffer.from([
-    0x4d, 0x34, 0x41, 0x20, // major_brand: 'M4A '
-    0x00, 0x00, 0x00, 0x00, // minor_version: 0
-    0x4d, 0x34, 0x41, 0x20, // compatible_brand: 'M4A '
-    0x6d, 0x70, 0x34, 0x32, // compatible_brand: 'mp42'
-    0x69, 0x73, 0x6f, 0x6d, // compatible_brand: 'isom'
+  const ftypData = new Uint8Array([
+    0x4d, 0x34, 0x41, 0x20,
+    0x00, 0x00, 0x00, 0x00,
+    0x4d, 0x34, 0x41, 0x20,
+    0x6d, 0x70, 0x34, 0x32,
+    0x69, 0x73, 0x6f, 0x6d,
   ]);
   const ftyp = createAtom('ftyp', ftypData);
 
-  // Build stts (time-to-sample)
-  const sttsData = Buffer.alloc(8 + sttsEntries.length * 8);
-  sttsData.writeUInt32BE(0, 0); // version/flags
-  sttsData.writeUInt32BE(sttsEntries.length, 4);
+  // Build stts
+  const sttsData = new Uint8Array(8 + sttsEntries.length * 8);
+  writeUInt32BE(sttsData, 0, 0);
+  writeUInt32BE(sttsData, sttsEntries.length, 4);
   for (let i = 0; i < sttsEntries.length; i++) {
-    sttsData.writeUInt32BE(sttsEntries[i].sampleCount, 8 + i * 8);
-    sttsData.writeUInt32BE(sttsEntries[i].sampleDelta, 8 + i * 8 + 4);
+    writeUInt32BE(sttsData, sttsEntries[i].sampleCount, 8 + i * 8);
+    writeUInt32BE(sttsData, sttsEntries[i].sampleDelta, 8 + i * 8 + 4);
   }
   const stts = createAtom('stts', sttsData);
 
-  // Build stsc (sample-to-chunk) - all samples in one chunk
-  const stscData = Buffer.alloc(8 + 12);
-  stscData.writeUInt32BE(0, 0); // version/flags
-  stscData.writeUInt32BE(1, 4); // entry count
-  stscData.writeUInt32BE(1, 8); // first chunk (1-based)
-  stscData.writeUInt32BE(sampleSizes.sampleCount, 12); // samples per chunk
-  stscData.writeUInt32BE(1, 16); // sample description index
+  // Build stsc
+  const stscData = new Uint8Array(8 + 12);
+  writeUInt32BE(stscData, 0, 0);
+  writeUInt32BE(stscData, 1, 4);
+  writeUInt32BE(stscData, 1, 8);
+  writeUInt32BE(stscData, sampleSizes.sampleCount, 12);
+  writeUInt32BE(stscData, 1, 16);
   const stsc = createAtom('stsc', stscData);
 
-  // Build stsz (sample sizes)
+  // Build stsz
   let stsz;
   if (sampleSizes.defaultSize > 0) {
-    // Fixed size samples
-    const stszData = Buffer.alloc(12);
-    stszData.writeUInt32BE(0, 0); // version/flags
-    stszData.writeUInt32BE(sampleSizes.defaultSize, 4);
-    stszData.writeUInt32BE(sampleSizes.sampleCount, 8);
+    const stszData = new Uint8Array(12);
+    writeUInt32BE(stszData, 0, 0);
+    writeUInt32BE(stszData, sampleSizes.defaultSize, 4);
+    writeUInt32BE(stszData, sampleSizes.sampleCount, 8);
     stsz = createAtom('stsz', stszData);
   } else {
-    // Variable size samples
-    const stszData = Buffer.alloc(12 + sampleSizes.sizes.length * 4);
-    stszData.writeUInt32BE(0, 0); // version/flags
-    stszData.writeUInt32BE(0, 4); // default size = 0
-    stszData.writeUInt32BE(sampleSizes.sizes.length, 8);
+    const stszData = new Uint8Array(12 + sampleSizes.sizes.length * 4);
+    writeUInt32BE(stszData, 0, 0);
+    writeUInt32BE(stszData, 0, 4);
+    writeUInt32BE(stszData, sampleSizes.sizes.length, 8);
     for (let i = 0; i < sampleSizes.sizes.length; i++) {
-      stszData.writeUInt32BE(sampleSizes.sizes[i], 12 + i * 4);
+      writeUInt32BE(stszData, sampleSizes.sizes[i], 12 + i * 4);
     }
     stsz = createAtom('stsz', stszData);
   }
 
-  // Placeholder for stco - will update after we know moov size
-  const stcoData = Buffer.alloc(12);
-  stcoData.writeUInt32BE(0, 0); // version/flags
-  stcoData.writeUInt32BE(1, 4); // entry count = 1 chunk
-  // stcoData[8-11] = chunk offset, will be filled in later
+  // Build stco placeholder
+  const stcoData = new Uint8Array(12);
+  writeUInt32BE(stcoData, 0, 0);
+  writeUInt32BE(stcoData, 1, 4);
   const stco = createAtom('stco', stcoData);
 
-  // Build stbl (sample table)
-  const stbl = createAtom('stbl', Buffer.concat([stsd, stts, stsc, stsz, stco]));
+  // Build stbl
+  const stbl = createAtom('stbl', concatArrays(stsd, stts, stsc, stsz, stco));
 
   // Build dinf with dref
-  const drefData = Buffer.from([
-    0x00, 0x00, 0x00, 0x00, // version/flags
-    0x00, 0x00, 0x00, 0x01, // entry count = 1
-    0x00, 0x00, 0x00, 0x0c, // url atom size = 12
-    0x75, 0x72, 0x6c, 0x20, // 'url '
-    0x00, 0x00, 0x00, 0x01, // flags = self-contained
+  const drefData = new Uint8Array([
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x0c,
+    0x75, 0x72, 0x6c, 0x20,
+    0x00, 0x00, 0x00, 0x01,
   ]);
   const dref = createAtom('dref', drefData);
   const dinf = createAtom('dinf', dref);
 
-  // Build smhd (sound media header)
-  const smhdData = Buffer.from([
-    0x00, 0x00, 0x00, 0x00, // version/flags
-    0x00, 0x00, // balance
-    0x00, 0x00, // reserved
+  // Build smhd
+  const smhdData = new Uint8Array([
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00,
+    0x00, 0x00,
   ]);
   const smhd = createAtom('smhd', smhdData);
 
   // Build minf
-  const minf = createAtom('minf', Buffer.concat([smhd, dinf, stbl]));
+  const minf = createAtom('minf', concatArrays(smhd, dinf, stbl));
 
-  // Build hdlr for mdia
-  const hdlrData = Buffer.from([
-    0x00, 0x00, 0x00, 0x00, // version/flags
-    0x00, 0x00, 0x00, 0x00, // pre-defined
-    0x73, 0x6f, 0x75, 0x6e, // handler_type: 'soun'
-    0x00, 0x00, 0x00, 0x00, // reserved
-    0x00, 0x00, 0x00, 0x00, // reserved
-    0x00, 0x00, 0x00, 0x00, // reserved
-    0x00, // name (empty string)
+  // Build hdlr
+  const hdlrData = new Uint8Array([
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x73, 0x6f, 0x75, 0x6e,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00,
   ]);
   const hdlr = createAtom('hdlr', hdlrData);
 
-  // Build mdhd (media header)
-  const mdhdData = Buffer.alloc(24);
-  mdhdData.writeUInt32BE(0, 0); // version/flags (version 0)
-  mdhdData.writeUInt32BE(0, 4); // creation_time
-  mdhdData.writeUInt32BE(0, 8); // modification_time
-  mdhdData.writeUInt32BE(mdhd.timescale, 12); // timescale
-  mdhdData.writeUInt32BE(mdhd.duration, 16); // duration
-  mdhdData.writeUInt16BE(0x55c4, 20); // language: 'und'
-  mdhdData.writeUInt16BE(0, 22); // quality
+  // Build mdhd
+  const mdhdData = new Uint8Array(24);
+  writeUInt32BE(mdhdData, 0, 0);
+  writeUInt32BE(mdhdData, 0, 4);
+  writeUInt32BE(mdhdData, 0, 8);
+  writeUInt32BE(mdhdData, mdhd.timescale, 12);
+  writeUInt32BE(mdhdData, mdhd.duration, 16);
+  writeUInt16BE(mdhdData, 0x55c4, 20);
+  writeUInt16BE(mdhdData, 0, 22);
   const mdhdAtom = createAtom('mdhd', mdhdData);
 
   // Build mdia
-  const mdia = createAtom('mdia', Buffer.concat([mdhdAtom, hdlr, minf]));
+  const mdia = createAtom('mdia', concatArrays(mdhdAtom, hdlr, minf));
 
-  // Build tkhd (track header)
-  const tkhdData = Buffer.alloc(84);
-  tkhdData.writeUInt8(0, 0); // version
-  tkhdData.writeUInt8(0, 1); // flags[0]
-  tkhdData.writeUInt8(0, 2); // flags[1]
-  tkhdData.writeUInt8(0x07, 3); // flags[2] = enabled + in_movie + in_preview
-  // creation_time, modification_time = 0
-  tkhdData.writeUInt32BE(1, 12); // track_id
-  // reserved = 0
-  tkhdData.writeUInt32BE(mdhd.duration, 20); // duration (in movie timescale)
-  // remaining fields are zero (no video dimensions, etc.)
-  tkhdData.writeUInt32BE(0x00010000, 76); // volume = 1.0 (fixed point)
+  // Build tkhd
+  const tkhdData = new Uint8Array(84);
+  tkhdData[0] = 0;
+  tkhdData[1] = 0;
+  tkhdData[2] = 0;
+  tkhdData[3] = 0x07;
+  writeUInt32BE(tkhdData, 1, 12);
+  writeUInt32BE(tkhdData, mdhd.duration, 20);
+  writeUInt32BE(tkhdData, 0x00010000, 76);
   const tkhd = createAtom('tkhd', tkhdData);
 
   // Build trak
-  const trak = createAtom('trak', Buffer.concat([tkhd, mdia]));
+  const trak = createAtom('trak', concatArrays(tkhd, mdia));
 
-  // Build mvhd (movie header)
-  const mvhdData = Buffer.alloc(100);
-  mvhdData.writeUInt32BE(0, 0); // version/flags
-  // creation/modification times = 0
-  mvhdData.writeUInt32BE(mdhd.timescale, 12); // timescale
-  mvhdData.writeUInt32BE(mdhd.duration, 16); // duration
-  mvhdData.writeUInt32BE(0x00010000, 20); // rate = 1.0
-  mvhdData.writeUInt16BE(0x0100, 24); // volume = 1.0
-  // reserved = 0
-  // matrix (identity): 0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000
-  mvhdData.writeUInt32BE(0x00010000, 36);
-  mvhdData.writeUInt32BE(0x00010000, 52);
-  mvhdData.writeUInt32BE(0x40000000, 68);
-  mvhdData.writeUInt32BE(2, 96); // next_track_id
+  // Build mvhd
+  const mvhdData = new Uint8Array(100);
+  writeUInt32BE(mvhdData, 0, 0);
+  writeUInt32BE(mvhdData, mdhd.timescale, 12);
+  writeUInt32BE(mvhdData, mdhd.duration, 16);
+  writeUInt32BE(mvhdData, 0x00010000, 20);
+  writeUInt16BE(mvhdData, 0x0100, 24);
+  writeUInt32BE(mvhdData, 0x00010000, 36);
+  writeUInt32BE(mvhdData, 0x00010000, 52);
+  writeUInt32BE(mvhdData, 0x40000000, 68);
+  writeUInt32BE(mvhdData, 2, 96);
   const mvhd = createAtom('mvhd', mvhdData);
 
   // Build moov
-  const moov = createAtom('moov', Buffer.concat([mvhd, trak]));
+  const moov = createAtom('moov', concatArrays(mvhd, trak));
 
   // Build mdat
   const mdat = createAtom('mdat', audioData);
 
-  // Calculate actual chunk offset (ftyp + moov size)
-  const chunkOffset = ftyp.length + moov.length + 8; // +8 for mdat header
-  moov.writeUInt32BE(chunkOffset, moov.length - stco.length + 8 + 8);
+  // Update chunk offset
+  const chunkOffset = ftyp.length + moov.length + 8;
+  writeUInt32BE(moov, chunkOffset, moov.length - stco.length + 8 + 8);
 
-  return Buffer.concat([ftyp, moov, mdat]);
+  return concatArrays(ftyp, moov, mdat);
 }
 
 /**
  * Find a trak atom by index
- * @param {Buffer} buffer - File buffer
- * @param {number} trackIndex - Track index (0-based)
- * @returns {Object|null} Track info or null
  */
 function findTrack(buffer, trackIndex) {
   const atoms = parseAtoms(buffer);
@@ -470,12 +515,8 @@ function findTrack(buffer, trackIndex) {
 
 /**
  * Parse sample table from a trak atom
- * @param {Buffer} buffer - File buffer
- * @param {Object} trak - trak atom object
- * @returns {Object} Sample table data
  */
 function parseSampleTableFromTrak(buffer, trak) {
-  // Navigate: trak -> mdia -> minf -> stbl
   const trakChildren = parseAtoms(buffer, trak.dataOffset, trak.size - 8);
   const mdia = findAtom(trakChildren, 'mdia');
   if (!mdia) throw new Error('No mdia atom found in trak');
@@ -492,7 +533,6 @@ function parseSampleTableFromTrak(buffer, trak) {
 
   const stblChildren = parseAtoms(buffer, stbl.dataOffset, stbl.size - 8);
 
-  // Parse required atoms
   const stcoAtom = findAtom(stblChildren, 'stco');
   const co64Atom = findAtom(stblChildren, 'co64');
   const stszAtom = findAtom(stblChildren, 'stsz');
@@ -520,13 +560,13 @@ function parseSampleTableFromTrak(buffer, trak) {
 }
 
 /**
- * Extract a single track from an M4A file as a playable M4A buffer
- * @param {string} filePath - Path to M4A file
+ * Extract a single track as a playable M4A
+ * @param {Uint8Array|ArrayBuffer|Buffer} data - M4A file data (Uint8Array, ArrayBuffer, or Node.js Buffer)
  * @param {number} trackIndex - Track index (0-based)
- * @returns {Promise<Buffer>} Playable M4A file buffer
+ * @returns {Uint8Array} Playable M4A file
  */
-export async function extractTrack(filePath, trackIndex) {
-  const fileBuffer = await fs.readFile(filePath);
+export function extractTrack(data, trackIndex) {
+  const fileBuffer = toUint8Array(data);
 
   const trak = findTrack(fileBuffer, trackIndex);
   if (!trak) {
@@ -546,12 +586,12 @@ export async function extractTrack(filePath, trackIndex) {
 }
 
 /**
- * Extract all audio tracks from an M4A file
- * @param {string} filePath - Path to M4A file
- * @returns {Promise<Array<Buffer>>} Array of playable M4A file buffers
+ * Extract all audio tracks as playable M4A files
+ * @param {Uint8Array|ArrayBuffer|Buffer} data - M4A file data (Uint8Array, ArrayBuffer, or Node.js Buffer)
+ * @returns {Array<Uint8Array>} Array of playable M4A files
  */
-export async function extractAllTracks(filePath) {
-  const fileBuffer = await fs.readFile(filePath);
+export function extractAllTracks(data) {
+  const fileBuffer = toUint8Array(data);
 
   const atoms = parseAtoms(fileBuffer);
   const moov = findAtom(atoms, 'moov');
@@ -565,8 +605,6 @@ export async function extractAllTracks(filePath) {
     try {
       const sampleTable = parseSampleTableFromTrak(fileBuffer, traks[i]);
 
-      // Skip non-audio tracks (check for 'soun' handler type would be more robust)
-      // For now, skip tracks with very few samples (likely metadata tracks)
       if (sampleTable.sampleSizes.sampleCount < 100) {
         continue;
       }
@@ -589,12 +627,12 @@ export async function extractAllTracks(filePath) {
 }
 
 /**
- * Get track count from an M4A file
- * @param {string} filePath - Path to M4A file
- * @returns {Promise<number>} Number of tracks
+ * Get track count
+ * @param {Uint8Array|ArrayBuffer|Buffer} data - M4A file data (Uint8Array, ArrayBuffer, or Node.js Buffer)
+ * @returns {number} Number of tracks
  */
-export async function getTrackCount(filePath) {
-  const fileBuffer = await fs.readFile(filePath);
+export function getTrackCount(data) {
+  const fileBuffer = toUint8Array(data);
 
   const atoms = parseAtoms(fileBuffer);
   const moov = findAtom(atoms, 'moov');
@@ -607,12 +645,12 @@ export async function getTrackCount(filePath) {
 }
 
 /**
- * Get information about all tracks in an M4A file
- * @param {string} filePath - Path to M4A file
- * @returns {Promise<Array>} Array of track info objects
+ * Get information about all tracks
+ * @param {Uint8Array|ArrayBuffer|Buffer} data - M4A file data (Uint8Array, ArrayBuffer, or Node.js Buffer)
+ * @returns {Array} Array of track info objects
  */
-export async function getTrackInfo(filePath) {
-  const fileBuffer = await fs.readFile(filePath);
+export function getTrackInfo(data) {
+  const fileBuffer = toUint8Array(data);
 
   const atoms = parseAtoms(fileBuffer);
   const moov = findAtom(atoms, 'moov');
